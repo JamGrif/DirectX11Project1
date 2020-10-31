@@ -6,16 +6,22 @@
 "SV_TARGET" for writting from a pixel shader to a target texture
 */
 
-cbuffer CBUFFER0
+cbuffer VSCBUFFER0
 {
+    matrix WVPMatrix;
     float3 Offset;
-    float packing;
+    float packing0;
+};
+
+cbuffer PSCBUFFER0
+{
+    float4 Colour;
 };
 
 struct VS_INPUT
 {
     float4 vPos : POSITION;
-    float4 vColor : COLOR;
+    float4 vColor : COLOR; //Takes in colour from the vertices array in C++
 };
 
 struct VS_OUTPUT
@@ -29,9 +35,10 @@ VS_OUTPUT VShader(VS_INPUT input) //Vertex shader
 {
     VS_OUTPUT output;
   
-    output.vPos = input.vPos;
+    //output.vPos = input.vPos;
     output.vColor = input.vColor;
     
+    output.vPos = mul(WVPMatrix, input.vPos);
     output.vPos.xyz += Offset.xyz;
     
     return output;
@@ -41,7 +48,7 @@ VS_OUTPUT VShader(VS_INPUT input) //Vertex shader
 float4 PShader (VS_OUTPUT vertex) : SV_Target
 {
     float4 color = vertex.vColor;
-
+    color += Colour;
     return color;
 }
 

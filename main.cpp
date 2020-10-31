@@ -1,5 +1,5 @@
 #include <d3d11.h>
-#include <dxgi.h> //DirectX graphics infrastructure
+#include <dxgi.h> //DirectX graphics infrastructure. IDXGI prefix. All D3D stuff communicate with video adapter through DXGI
 #include <d3dx11.h>
 #include <windows.h>
 #include <dxerr.h>
@@ -8,7 +8,9 @@
 #define XM_NO_ALGINMENT
 #include <DirectXMath.h>
 using namespace DirectX;
-//test
+
+#include "Camera.h"
+
 //Windows globals and prototypes
 HINSTANCE	g_hInst = NULL;
 HWND		g_hWnd = NULL;
@@ -20,32 +22,43 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 //Direct3D globals and prototypes
 D3D_DRIVER_TYPE			g_driverType = D3D_DRIVER_TYPE_NULL;
 D3D_FEATURE_LEVEL		g_featureLevel = D3D_FEATURE_LEVEL_11_0;
-ID3D11Device*			g_pD3DDevice = NULL;
-ID3D11DeviceContext*	g_pImmediateContext = NULL;
-IDXGISwapChain*			g_pSwapChain = NULL;
-ID3D11RenderTargetView* g_pBackBufferRTView = NULL; //Render target (Area of memory where pixels can be drawn to) //Viewport is the rectangle a scene is projected onto. Also determines depth of the view frustum
-ID3D11Buffer* g_pConstantBuffer0 = NULL;
+
+ID3D11Device*			g_pD3DDevice = NULL; //Virtual representation of video adapter in our program
+ID3D11DeviceContext*	g_pImmediateContext = NULL; //Responsible for rendering
+IDXGISwapChain*			g_pSwapChain = NULL; //Contains screen buffers where scene is rendered to
+ID3D11RenderTargetView* g_pRenderTargetView = NULL; //Render target (Area of memory where pixels can be drawn to) Viewport is the rectangle a scene is projected onto. Also determines depth of the view frustum
+ID3D11Buffer* g_pVSConstantBuffer0 = NULL;
+ID3D11Buffer* g_pPSConstantBuffer0 = NULL;
+ID3D11DepthStencilView* g_pZBuffer = NULL;
+DXGI_SWAP_CHAIN_DESC sd;
 
 ID3D11Buffer*			g_pVertexBuffer;
 ID3D11VertexShader*		g_pVertexShader;
 ID3D11PixelShader*		g_pPixelShader;
 ID3D11InputLayout*		g_pInputLayout;
 
-UINT g_SCREENWIDTH = 640;
-UINT g_SCREENHEIGHT = 480;
+UINT g_SCREENWIDTH = 1280;
+UINT g_SCREENHEIGHT = 720;
+Camera* camera;
 
 float g_clear_colour[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 float x, y;
 
-//Constand Buffer struct. Must be exactly 16 bytes. Float is 4 bytes
-struct CONSTANT_BUFFER0
+//Constant Buffer struct. Must be exactly 16 bytes. Float is 4 bytes
+struct VS_CONSTANT_BUFFER0
 {
+	XMMATRIX WorldViewProjection; //64 bytes
 	XMFLOAT3 Offset; 
 	float packing_bytes; 
 };
-CONSTANT_BUFFER0 cb0;
-float Offset = (0.0f, 0.0f, 0.0f);
+VS_CONSTANT_BUFFER0 VScb0;
 
+struct PS_CONSTANT_BUFFER0
+{
+	XMFLOAT4 Colour;
+	//float packing_bytes;
+};
+PS_CONSTANT_BUFFER0 PScb0;
 
 //Vertex structure
 struct POS_COL_VERTEX
@@ -54,15 +67,70 @@ struct POS_COL_VERTEX
 	XMFLOAT4 Col;
 };
 
+
 POS_COL_VERTEX vertices[] =
 {
-	{XMFLOAT3(0.9f, 0.9f, 0.0f),   XMFLOAT4(0.1f, 0.5f, 0.9f, 1.0f)},
-	{XMFLOAT3(0.9f, -0.9f, 0.0f),  XMFLOAT4(0.3f, 0.3f, 0.1f, 1.0f)},
-	{XMFLOAT3(-0.9f, -0.9f, 0.0f), XMFLOAT4(0.6f, 0.2f, 0.9f, 1.0f)},
-	{XMFLOAT3(0.9f, 0.9f, 0.0f),   XMFLOAT4(0.9f, 0.1f, 0.1f, 1.0f)},
-	{XMFLOAT3(-0.9f, -0.9f, 0.0f), XMFLOAT4(0.1f, 0.9f, 0.8f, 1.0f)},
-	{XMFLOAT3(-0.9f, 0.9f, 0.0f),  XMFLOAT4(1.0f, 0.0f, 0.4f, 1.0f)}
+	{XMFLOAT3(-1.0f, 1.0f, 1.0f),    XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, 1.0f),   XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, 1.0f),    XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, 1.0f),    XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, 1.0f),     XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, 1.0f),    XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+
+	{XMFLOAT3(-1.0f, -1.0f, -1.0f),    XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, -1.0f),     XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, -1.0f),     XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, -1.0f),     XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, -1.0f),      XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, -1.0f),     XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)},
+
+	{XMFLOAT3(-1.0f, -1.0f, -1.0f),     XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, 1.0f),    XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, -1.0f),      XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, 1.0f),    XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, 1.0f),     XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, -1.0f),      XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f)},
+
+	{XMFLOAT3(1.0f, -1.0f, 1.0f),    XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, -1.0f),   XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, -1.0f),     XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, 1.0f),   XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, 1.0f),    XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, -1.0f),     XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)},
+
+	{XMFLOAT3(1.0f, -1.0f, -1.0f),    XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, 1.0f),     XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, -1.0f),    XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(1.0f, -1.0f, 1.0f),    XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, 1.0f),   XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, -1.0f, -1.0f),    XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)},
+
+	{XMFLOAT3(1.0f, 1.0f, 1.0f),    XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, -1.0f),     XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, -1.0f),      XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, 1.0f),      XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(1.0f, 1.0f, 1.0f),     XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
+	{XMFLOAT3(-1.0f, 1.0f, -1.0f),    XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)},
 };
+
+XMMATRIX scale = XMMatrixScaling(1, 1, 2);
+XMMATRIX translation = XMMatrixTranslation(0,0,5);
+XMMATRIX rotation = XMMatrixRotationX(XMConvertToRadians(45.0)); //Rotate 45 degrees around X axis, need to convert to radians
+XMMATRIX world_transform = scale * rotation * translation;
+
+XMMATRIX view = XMMatrixIdentity();
+XMMATRIX projection = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0), g_SCREENWIDTH / g_SCREENHEIGHT, 1.0, 100.0);
+
+float Tx = 0.0f;
+float Ty = 0.0f;
+float Tz = 10.0f;
+float Rx = 0.0f;
+float Ry = 0.0f;
+float Rz = 0.0f;
+
+//XMMATRIX world = XMMatrixTranslation(0, 0, 5);
+//XMMATRIX WorldViewProjection1 = world * view * projection;
+
 
 
 HRESULT InitialiseD3D();
@@ -70,6 +138,7 @@ HRESULT InitialiseGraphics();
 void ShutdownD3D();
 void RenderFrame();
 HRESULT ResizeBuffer();
+XMMATRIX CreatePerspectiveMatrix(float FOV, float AspectRatio, float NearZ, float FarZ);
 
 //Windows probram entry point
 int WINAPI WinMain(_In_ HINSTANCE hInstance, //handle to an instance
@@ -127,10 +196,34 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, //handle to an instance
 void RenderFrame()
 {
 	//Clear the back buffer
-	g_pImmediateContext->ClearRenderTargetView(g_pBackBufferRTView, g_clear_colour);
+	g_pImmediateContext->ClearRenderTargetView(g_pRenderTargetView, g_clear_colour);
 
-	//Upload new values for constant buffer
-	g_pImmediateContext->UpdateSubresource(g_pConstantBuffer0, 0, 0, &cb0, 0, 0);
+	//Clear the Z buffer
+	g_pImmediateContext->ClearDepthStencilView(g_pZBuffer, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+	XMMATRIX world = XMMatrixRotationX(XMConvertToRadians(Rx));
+	world *= XMMatrixRotationY(XMConvertToRadians(Ry));
+	world *= XMMatrixRotationZ(XMConvertToRadians(Rz));
+	world *= XMMatrixTranslation(Tx, Ty, Tz);
+	
+	XMMATRIX WorldViewProjection1 = world * view * projection;
+	VScb0.WorldViewProjection = WorldViewProjection1;
+
+	
+	PScb0.Colour.x += 0.001f;
+	PScb0.Colour.y -= 0.001f;
+	PScb0.Colour.z += 0.001f;
+
+	if (PScb0.Colour.x >= 1) { PScb0.Colour.x = 0; }
+	if (PScb0.Colour.y <= 0) { PScb0.Colour.y = 1; }
+	if (PScb0.Colour.z >= 1) { PScb0.Colour.z = 0; }
+	
+	//Upload new values for constant buffers
+	g_pImmediateContext->UpdateSubresource(g_pVSConstantBuffer0, 0, 0, &VScb0, 0, 0);
+	g_pImmediateContext->VSSetConstantBuffers(0, 1, &g_pVSConstantBuffer0);
+	
+	g_pImmediateContext->UpdateSubresource(g_pPSConstantBuffer0, 0, 0, &PScb0, 0, 0);
+	g_pImmediateContext->PSSetConstantBuffers(0, 1, &g_pPSConstantBuffer0);
 
 	//Set vertex buffer
 	UINT stride = sizeof(POS_COL_VERTEX);
@@ -142,7 +235,7 @@ void RenderFrame()
 
 	//Draws the object in vertex buffer
 	g_pImmediateContext->Draw(
-		6, //Number of vertices to draw
+		sizeof(vertices)/sizeof(vertices[0]), //Number of vertices to draw
 		0	//0 is buffer start position
 	);
 	//Display what has just been renderered
@@ -186,46 +279,48 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 	case WM_KEYDOWN:
 		if (wParam == 0x41) //A
 		{
-			cb0.Offset.x -= 0.01;
+			//VScb0.Offset.x -= 0.01;
+			Tx -= 0.01;
 		}
 
 		if (wParam == 0x44) //D
 		{
-			cb0.Offset.x += 0.01;
+			//VScb0.Offset.x += 0.01;
+			Tx += 0.01;
 		}
 
 		if (wParam == 0x53) //W
 		{
-			cb0.Offset.y -= 0.01;
+			//VScb0.Offset.y -= 0.01;
+			Ty -= 0.01;
 		}
 
 		if (wParam == 0x57) //S
 		{
-			cb0.Offset.y += 0.01;
+			//VScb0.Offset.y += 0.01;
+			Ty += 0.01;
 		}
-
-	//case WM_KEYDOWN: //Key pressed down
-		/*
+		
 		if (wParam == VK_LEFT)
 		{
-			
+			Rx -= 1.0;
 		}
 
 		if (wParam == VK_RIGHT)
 		{
-			
+			Rx += 1.0;
 		}
 
 		if (wParam == VK_DOWN)
 		{
-			
+			Ry += 1.0;
 		}
 
 		if (wParam == VK_UP)
 		{
-			
+			Ry -= 1.0;
 		}
-		*/
+		
 	case WM_LBUTTONDOWN:
 		
 	case WM_MOUSEMOVE:
@@ -247,7 +342,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 HRESULT ResizeBuffer()
 {
 	HRESULT hr;
-
+	
 	RECT rc;
 	GetClientRect(g_hWnd, &rc); //Returns the rectangle that defines the renderable portion of the window
 	UINT width = rc.right - rc.left;
@@ -256,7 +351,7 @@ HRESULT ResizeBuffer()
 	g_pImmediateContext->OMSetRenderTargets(0, 0, 0);
 
 	// Release all outstanding references to the swap chain's buffers.
-	if (g_pBackBufferRTView != NULL) { g_pBackBufferRTView->Release(); }
+	if (g_pRenderTargetView != NULL) { g_pRenderTargetView->Release(); }
 
 	g_pSwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 
@@ -269,18 +364,47 @@ HRESULT ResizeBuffer()
 		return hr;
 
 	//Use the back buffer texture pointer to create render target view
-	hr = g_pD3DDevice->CreateRenderTargetView(p_BackBufferTexture, NULL, &g_pBackBufferRTView);
+	hr = g_pD3DDevice->CreateRenderTargetView(p_BackBufferTexture, NULL, &g_pRenderTargetView);
 
 	p_BackBufferTexture->Release();
 
 	if (FAILED(hr))
 		return hr;
 
+	//Create a Z buffer texture
+	D3D11_TEXTURE2D_DESC tex2dDesc;
+	ZeroMemory(&tex2dDesc, sizeof(tex2dDesc));
+
+	tex2dDesc.Width = width;
+	tex2dDesc.Height = height;
+	tex2dDesc.ArraySize = 1;
+	tex2dDesc.MipLevels = 1;
+	tex2dDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	tex2dDesc.SampleDesc.Count = sd.SampleDesc.Count;
+	tex2dDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+	tex2dDesc.Usage = D3D11_USAGE_DEFAULT;
+
+	ID3D11Texture2D* pZBufferTexture;
+	hr = g_pD3DDevice->CreateTexture2D(&tex2dDesc, NULL, &pZBufferTexture);
+
+	if (FAILED(hr))
+		return hr;
+
+	//Create the Z buffer
+	D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc;
+	ZeroMemory(&dsvDesc, sizeof(dsvDesc));
+
+	dsvDesc.Format = tex2dDesc.Format;
+	dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+
+	g_pD3DDevice->CreateDepthStencilView(pZBufferTexture, &dsvDesc, &g_pZBuffer);
+	pZBufferTexture->Release();
+
 	//Set the render target view
 	g_pImmediateContext->OMSetRenderTargets(
 		1,						//Number of render targets to set
-		&g_pBackBufferRTView,	//Pointer to a list of render target views
-		NULL					//List of depth views
+		&g_pRenderTargetView,	//Pointer to a list of render target views
+		g_pZBuffer				//List of depth views
 	);
 
 	//Set the viewport
@@ -299,6 +423,13 @@ HRESULT ResizeBuffer()
 	);
 
 	return S_OK;
+}
+
+XMMATRIX CreatePerspectiveMatrix(float FOV, float AspectRatio, float NearZ, float FarZ)
+{
+	XMMATRIX perspective = XMMatrixIdentity();;
+		
+	return perspective;
 }
 
 //Register class and create window
@@ -384,7 +515,7 @@ HRESULT InitialiseD3D()
 	UINT numFeatureLevels = ARRAYSIZE(featureLevels);
 
 	//Swap chain is the set of buffers that is rendered to
-	DXGI_SWAP_CHAIN_DESC sd;
+	
 	ZeroMemory(&sd, sizeof(sd)); //Standard DirectX way of initialising structures
 	sd.BufferCount = 1; //Number of back buffers
 	sd.BufferDesc.Width = width; //Width of renderable area
@@ -421,7 +552,6 @@ HRESULT InitialiseD3D()
 			break;
 	}
 
-
 	hr = ResizeBuffer();
 
 	if (FAILED(hr))
@@ -455,8 +585,6 @@ HRESULT InitialiseGraphics()
 	{
 		return hr;
 	}
-
-	
 
 	//Copy the vertices into the buffer
 	D3D11_MAPPED_SUBRESOURCE ms;
@@ -555,28 +683,29 @@ HRESULT InitialiseGraphics()
 
 	g_pImmediateContext->IASetInputLayout(g_pInputLayout); //Sets input layout
 
-	//Create constant buffer 0
+	VScb0.Offset = { 0.0f,0.0f,0.0f };
+
+	//Create constant buffer 0 + 1
 	D3D11_BUFFER_DESC constant_buffer_desc;
 	ZeroMemory(&constant_buffer_desc, sizeof(constant_buffer_desc));
 
 	constant_buffer_desc.Usage = D3D11_USAGE_DEFAULT; //Can use UpdateSubresource() to update
-	constant_buffer_desc.ByteWidth = 16; //Must be a multiple of 16 - IMPORTANT (Constant Buffers are uploaded in 16 byte chunks)
+	//constant_buffer_desc.ByteWidth = 16; //Must be a multiple of 16 - IMPORTANT (Constant Buffers are uploaded in 16 byte chunks)
 	constant_buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER; //Use as constant buffer
 
-	hr = g_pD3DDevice->CreateBuffer(&constant_buffer_desc, NULL, &g_pConstantBuffer0);
+	constant_buffer_desc.ByteWidth = 80;
+	hr = g_pD3DDevice->CreateBuffer(&constant_buffer_desc, NULL, &g_pVSConstantBuffer0);
 
-	//CONSTANT_BUFFER0 cb0;
-	//cb0.RedAmount = 1.0f;	
+	constant_buffer_desc.ByteWidth = 16;
+	hr = g_pD3DDevice->CreateBuffer(&constant_buffer_desc, NULL, &g_pPSConstantBuffer0);
 
-	//Upload new values for constant buffer
-	g_pImmediateContext->UpdateSubresource(g_pConstantBuffer0, 0, 0, &cb0, 0, 0);
-
-	g_pImmediateContext->VSSetConstantBuffers(0, 1, &g_pConstantBuffer0);
-
+	
 	if (FAILED(hr))
 	{
 		return hr;
 	}
+
+	//Camera* camera = new Camera();
 
 	return S_OK;
 
@@ -590,8 +719,10 @@ void ShutdownD3D()
 	if (g_pInputLayout) g_pInputLayout->Release();
 	if (g_pVertexShader) g_pVertexShader->Release();
 	if (g_pPixelShader) g_pPixelShader->Release();
-	if (g_pConstantBuffer0) g_pConstantBuffer0->Release();
-	if (g_pBackBufferRTView) g_pBackBufferRTView->Release();
+	if (g_pVSConstantBuffer0) g_pVSConstantBuffer0->Release();
+	if (g_pPSConstantBuffer0) g_pPSConstantBuffer0->Release();
+	if (g_pRenderTargetView) g_pRenderTargetView->Release();
+	if (g_pZBuffer) g_pZBuffer->Release();
 	if (g_pSwapChain) g_pSwapChain->Release();
 	if (g_pImmediateContext) g_pImmediateContext->Release();
 	if (g_pD3DDevice) g_pD3DDevice->Release();
